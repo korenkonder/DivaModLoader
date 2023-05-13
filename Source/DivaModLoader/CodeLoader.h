@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include "SigScan.h"
+
 typedef void InitEvent();
 typedef void D3DInitEvent(IDXGISwapChain*, ID3D11Device*, ID3D11DeviceContext*);
 typedef void OnFrameEvent(IDXGISwapChain*);

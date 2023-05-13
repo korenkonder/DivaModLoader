@@ -38,6 +38,8 @@ std::vector<EventPair<D3DInitEvent>> CodeLoader::d3dInitEvents;
 std::vector<OnFrameEvent*> CodeLoader::onFrameEvents;
 std::vector<OnFrameEvent*> CodeLoader::onResizeEvents;
 
+void** ppMmDevice;
+
 VTABLE_HOOK(HRESULT, WINAPI, IDXGISwapChain, Present, UINT SyncInterval, UINT Flags)
 {
     for (auto& onFrameEvent : CodeLoader::onFrameEvents)
@@ -63,6 +65,14 @@ SIG_SCAN
     "\xFF\x15\xCC\xCC\xCC\xCC\x41\xC6\x87\xAC\x00\x00\x00\x00", 
     "xx????xxxxxxxx"
 ); // function call, FF 15 ?? ?? ?? ??
+
+SIG_SCAN
+(
+    sigInitD3DSwapChain,
+    0x1402C0B60,
+    "\x40\x55\x53\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57\x48\x8D\x6C\x24\x88\x48\x81\xEC\x78\x01\x00\x00\x48\x8B\x05\xE8\xB7\xAD\x00",
+    "xxxxxxxxxxxxxxxxxxxxx????xxx????"
+);
 
 HOOK(HRESULT, WINAPI, D3D11CreateDeviceAndSwapChain, /* address set in init due to denuvo shenanigans */ nullptr,
     IDXGIAdapter* pAdapter,
@@ -92,25 +102,34 @@ HOOK(HRESULT, WINAPI, D3D11CreateDeviceAndSwapChain, /* address set in init due 
         pFeatureLevel,
         ppImmediateContext);
 
-    if (FAILED(result))
-        return result;
+    ppMmDevice = (void**)ppDevice;
 
-    if (!CodeLoader::d3dInitEvents.empty() && ppSwapChain && *ppSwapChain && 
-        ppDevice && *ppDevice && ppImmediateContext && *ppImmediateContext)
+    return result;
+}
+
+HOOK(__int64, __fastcall, InitD3DSwapChain, sigInitD3DSwapChain(), __int64 a1, __int64 a2, __int32 a3, __int32 a4, __int8 a5, __int8 a6, __int32 a7, __int64 a8, __int64 a9)
+{
+    __int64 ret = originalInitD3DSwapChain(a1, a2, a3, a4, a5, a6, a7, a8, a9);
+
+    IDXGISwapChain* ppSwapChain = (IDXGISwapChain*)((__int64*)ret)[0];
+    ID3D11Device* ppDevice = (ID3D11Device*)ppMmDevice[0];
+    ID3D11DeviceContext* ppImmediateContext = (ID3D11DeviceContext*)ppMmDevice[1];
+
+    if (!CodeLoader::d3dInitEvents.empty() && ppSwapChain && ppDevice && ppImmediateContext)
     {
         CurrentDirectoryGuard guard;
 
         for (auto& event : CodeLoader::d3dInitEvents)
-            event.run(*ppSwapChain, *ppDevice, *ppImmediateContext);
+            event.run(ppSwapChain, ppDevice, ppImmediateContext);
     }
 
-    if (!CodeLoader::onFrameEvents.empty() && ppSwapChain && *ppSwapChain)
-        INSTALL_VTABLE_HOOK(IDXGISwapChain, *ppSwapChain, Present, 8);
+    if (!CodeLoader::onFrameEvents.empty() && ppSwapChain)
+        INSTALL_VTABLE_HOOK(IDXGISwapChain, ppSwapChain, Present, 8);
 
-    if (!CodeLoader::onResizeEvents.empty() && ppSwapChain && *ppSwapChain)
-        INSTALL_VTABLE_HOOK(IDXGISwapChain, *ppSwapChain, ResizeBuffers, 13);
+    if (!CodeLoader::onResizeEvents.empty() && ppSwapChain)
+        INSTALL_VTABLE_HOOK(IDXGISwapChain, ppSwapChain, ResizeBuffers, 13);
 
-    return result;
+    return ret;
 }
 
 // Gets called during _scrt_common_main_seh.
@@ -208,6 +227,7 @@ void CodeLoader::init()
             *(D3D11CreateDeviceAndSwapChainDelegate**)readInstrPtr(sigD3D11CreateDeviceAndSwapChain(), 0, 0x6);
 
         INSTALL_HOOK(D3D11CreateDeviceAndSwapChain);
+        INSTALL_HOOK(InitD3DSwapChain);
     }
 }
 
